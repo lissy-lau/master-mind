@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+
+<SubstitutionScheme>
+  <SubstitutionAlgorithm Name="Simple Substitution" CaseSensitive="0" KeepUnknownChar="1" />
+  <SubstitutionTuple Plain="-" Cipher="A" />
+  <SubstitutionTuple Plain="-" Cipher="B" />
+  <SubstitutionTuple Plain="-" Cipher="C" />
+  <SubstitutionTuple Plain="-" Cipher="D" />
+  <SubstitutionTuple Plain="-" Cipher="E" />
+  <SubstitutionTuple Plain="-" Cipher="F" />
+  <SubstitutionTuple Plain="-" Cipher="G" />
+  <SubstitutionTuple Plain="-" Cipher="H" />
+  <SubstitutionTuple Plain="-" Cipher="I" />
+  <SubstitutionTuple Plain="-" Cipher="J" />
+  <SubstitutionTuple Plain="-" Cipher="K" />
+  <SubstitutionTuple Plain="-" Cipher="L" />
+  <SubstitutionTuple Plain="-" Cipher="M" />
+  <SubstitutionTuple Plain="-" Cipher="N" />
+  <SubstitutionTuple Plain="-" Cipher="O" />
+  <SubstitutionTuple Plain="-" Cipher="P" />
+  <SubstitutionTuple Plain="-" Cipher="Q" />
+  <SubstitutionTuple Plain="-" Cipher="R" />
+  <SubstitutionTuple Plain="-" Cipher="S" />
+  <SubstitutionTuple Plain="-" Cipher="T" />
+  <SubstitutionTuple Plain="-" Cipher="U" />
+  <SubstitutionTuple Plain="-" Cipher="V" />
+  <SubstitutionTuple Plain="-" Cipher="W" />
+  <SubstitutionTuple Plain="-" Cipher="X" />
+  <SubstitutionTuple Plain="-" Cipher="Y" />
+  <SubstitutionTuple Plain="-" Cipher="Z" />
+</SubstitutionScheme>
+

@@ -1,0 +1,36 @@
+//////////////////////////////////////////////////////////////////////////////
+/// @class |CLASSNAME|
+/// @brief |CURSOR|
+//////////////////////////////////////////////////////////////////////////////
+class |CLASSNAME|
+{
+public:
+
+    // ---- LIFECYCLE ----
+
+    |CLASSNAME|();  // Constructor
+
+    // Use compiler-generated copy constructor, assignment operator and destructor
+
+    // ---- OPERATORS ----
+
+    // ---- OPERATIONS ----
+
+    // ---- ACCESS ----
+
+    // ---- INQUIRY ----
+
+protected:
+
+private:
+
+}; // End of class |CLASSNAME|
+
+//////////////////////////////////////////////////////////////////////////////
+/// @fn |CLASSNAME|
+/// @brief Constructor
+//////////////////////////////////////////////////////////////////////////////
+|CLASSNAME|::|CLASSNAME| ()
+{
+}  // End of |CLASSNAME|::|CLASSNAME|
+

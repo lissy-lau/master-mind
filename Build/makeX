@@ -1,0 +1,1554 @@
+#!/usr/bin/perl
+
+###############################################################################
+# @file makeX
+# @brief Load Build Script
+#
+# Description:
+# 
+#   Perl script that acts as a wrapper make command that
+#   simplifies the user interface to building code in the
+#   loadbuild architecture.
+#
+#   Specifically, makeX can build makefiles, modules,
+#   components, unittests, executables all with various
+#   targets and flags.
+#
+# Preconditions for using makeX:
+#
+#   1. Directory Structure
+#
+#     Directory structure is assumed to be arranged in terms of executables, 
+#     categories and modules where executables contain categories and categories
+#     contain modules. Unittest executables can contain categories and/or modules.
+#     The location of directories are as follows:
+#
+#         Executables  $MASTERMIND_ROOT/Build/Target/$TARGET
+#         Categories   $MASTERMIND_ROOT/Build/Target/$TARGET/category/$CATEGORY
+#         Modules      $MASTERMIND_ROOT/Build/Target/$TARGET/category/$CATEGORY/module/$MODULE
+#
+#     Under each of the above directories, you may find one of the
+#     following standard directories.
+#
+#         bld          makefiles
+#         bin/$TARGET  binary files
+#         lib/$TARGET  libraries files
+#         obj/$TARGET  object files
+#         include      header files
+#         src          source files
+#         unittest     test source files
+# 
+#     $MASTERMIND_ROOT is defined by the environment init script, and 
+#     represents the base of the source code files.
+#
+#  2. BLD file that specifies the environment entirely such as those
+#     required for Loadbuild.
+#
+#  3. Naming convention of makefiles.
+#
+#          <Target>.mk
+#
+#          e.g. LinuxConsoleApp.mk
+#               LinuxNcursesApp.mak
+#               LinuxUnittest.mak
+#
+#  Notes:
+#  * Current Category
+#    If a module is being compiled, makeX automatically discovers 
+#    the current $category from the current working directory path.
+#  * For general usage, type "makeX -help"
+#  * For more verbose output, type "makeX -verbose"
+#  * To list possible targets, use one of the types without any arguments
+#
+
+#===========================================================================
+# Function Prototypes
+
+sub usage;                      # usage($optional_string)
+sub note;                       # note($string)
+sub makeTopDown;                # make top down build
+sub veryEnv;                    # verify env
+
+sub getBldStr;                  # get bld file string
+sub readBLD;                    # read bld file
+sub setEnvVar;                  # setEnvVar($EnvVar, $Value)
+sub unSetEnvVar;                # unSetEnvVar($EnvVar)
+
+sub findCurrentCategory;        # findCurrentCategory()
+
+sub retrieveExecMakefiles;      # retrieveExecMakefiles($executable, $target)
+sub retrieveCategoryMakefiles;  # retrieveCategoryMakefiles($category, $target)
+sub retrieveModuleMakefiles;    # retrieveModuleMakefiles($module, $domain, $target)
+
+sub compileMakefiles;           # compileMakefiles (\@makefiles, \@makeargs, \@maketargetRefs)
+
+sub cleanENV;                   # cleanENV()
+
+sub handleLogOpts;              # Process logging options
+sub performBuild($);            # Performs the build and writes statistics
+
+
+#===========================================================================
+# Global Variables
+
+my @makefiles;
+my @makeArgs;
+my $delim           = ',:';
+my $error           = "ERROR";
+my @makeTargets     = "";
+my $CFLAGS          = "";
+
+my $MASTERMIND_ROOT = "";
+my $ITE_ROOT        = "";
+my $UTIL_ROOT       = "";
+my $GO_PATH         = "";
+my $BUILD_MAKE_CMD  = "";
+my $BUILD_ID        = "";
+my $target_make     = "";
+my $TARGET          = "";
+my $LOAD            = "";
+my $TARGET_PATH     = "";
+my $arch_type       = "";
+my $DIST_LABEL      = "";
+
+my $mFlagF          = "";   # A flag enabled when the target is "codegen"
+
+# Logging Variables
+my $User;
+my $Homedir;
+my $DebugTopDir;
+my $DebugDir;
+my $KeepDebugDirs;
+my $enableLogs;
+
+my $linenum         = 0;
+my $ifCond          = 1;
+my $ifBit           = 0x1;
+my @fileHandlers;
+
+my $Build           = "";
+
+# This enables command buffering (flushes output of print commands from within "system" call)
+$| = 1;
+
+# envList defines all the environment variable RegExp patterns used by the load build
+
+my @envList =
+(
+    "MASTERMIND_ROOT",
+    "BUILD_ID",
+    "USER",
+    "PWD",
+    "BITMAP_PATH",
+    "ICON_PATH",
+    "MAGIC_PATH",
+    "MAKEFLAGS",
+    "BUILD_BLD",
+    "MANPATH",
+    "SHELL",
+    "GO_.*",
+    "RSU_LICENSE_MAP",
+    "CSCOPE_*",
+    "CSCOPE_DOMAIN",
+    "MAKEX_STATS_FILE",
+    "DIST_LABEL", 
+    "HOME",
+    "PATH"
+);
+
+
+#===========================================================================
+# START by getting the options from the command line
+#
+# Gets options from the command line (POSIX standard) and stores
+# in hash table "opt".
+
+use Getopt::Long;
+
+# Stores the program filename without suffix
+my $prog = basename($0, qw(.pl));
+
+# Command line for the statistics file
+my $commandline = $prog . " " . join(" ", @ARGV);
+
+($User, $Homedir) = (getpwuid($<))[0,7];
+
+my %opt = {};
+my $optres = GetOptions(\%opt,
+                       (
+                           'log' => \&handleLogOpts,
+                           'nolog' => \&handleLogOpts,
+                           "cflags:s@",
+                           "file:s@",
+                           "target:s@",
+                           "help",
+                           "link_only",
+                           "verbose",
+                           "keep_env",
+                           "clean",
+                           "cleanall",
+                           "flint",
+                           "install"
+                       ));
+
+$enableLogs = (@ARGV == 1 ? 1 : 0) unless defined $enableLogs;
+
+exit(1) if (!$optres);
+
+# Once the options have been retrieved, the remaining parameters
+if ($#ARGV < 0 || $#ARGV > 3)
+{
+    &usage();
+    exit(1);
+}
+else
+{
+    # Output usage if help option requested.
+    &usage() if $opt{help};
+
+    # Clean up the environment variables
+    unless ($opt{keep_env})
+    {
+       &cleanENV();
+    }
+    
+    $MASTERMIND_ROOT = $ENV{MASTERMIND_ROOT};
+    if ($MASTERMIND_ROOT eq "")
+    {
+	$err = "ERROR: Environment variable MASTERMIND_ROOT is not defined.\n";
+	die($err);
+    }
+
+    $Build = &findBldFile(@ARGV[0]);    
+
+    note "INFO: Using $Build\n";
+    
+    &verifyEnv($Build);
+    
+    &parseArg();
+
+    if (@ARGV[1] =~ /\.o/ || @ARGV[1] =~ /\.flint/)
+    {
+        note "INFO: Bottom-up Build @ARGV\n";
+        &makeBottomUp($target_make, @ARGV[1]);
+    }
+    else
+    {
+        note "INFO: Top-down Build @ARGV\n";
+        my $nArg = $#ARGV;
+        &makeTopDown($target_make, $nArg, @ARGV[1], @ARGV[2], @ARGV[3]);
+    }
+
+    if ($enableLogs)
+    {
+        &GzipBuildLog();
+    }
+
+    # End of program
+}
+
+
+#===========================================================================
+# Standard Perl Libraries to Be Used
+
+use File::Basename;
+use Cwd;
+use IO::Handle qw();
+use Sys::Hostname qw();
+
+# Perl pragma to restrict unsafe constructs 
+use strict;
+
+
+#===========================================================================
+# Handles the options 'log' and 'nolog' from the Getoptions() function
+
+sub handleLogOpts
+{
+    $enableLogs = (@_[0] eq "log" ? 1 : 0);
+}
+
+
+#===========================================================================
+# Performs the build as specified and records the usage statistics
+
+sub performBuild($)
+{
+    use IO::Handle qw( autoflush );
+    use Sys::Hostname qw ( hostname );
+  
+    my $cmd = shift;
+  
+    my $startTime = time();
+    my $rc        = system($cmd);  # Run the make command
+    my $runTime   = time() - $startTime;
+
+    my $hname     = hostname();
+    chomp (my $viewtag = `cleartool pwv -short`);
+    my $statsLine = "";
+    my $statsFile = $ENV{MAKEX_STATS_FILE};
+
+    note "INFO: [performBuild]";
+  
+    if (defined $statsFile && $statsFile =~ m{^/})
+    {
+        my $oldmask = umask(0111); # Ensure proper perms on stats file.
+
+        if (open(MXFILE, ">> $statsFile"))
+        {
+            &autoflush(*MXFILE, 1); # Disable buffering
+            $! = 0; # Zero errno
+            print MXFILE join(
+                                 ",",
+                                 scalar localtime($startTime), # Build start time
+                                 $runTime,                     # Build run time in seconds
+                                 $$,                           # makeX pid
+                                 $rc,                          # Exit code of make command
+                                 $hname,                       # Name of this host
+                                 $viewtag,                     # The view tag
+                                 $User,                        # User name
+                                 $commandline,                 # makeX command line
+                             ) . "\n";
+
+            $statsLine = ($! ? "Failed to write $statsFile - $!" : "Written to $statsFile");
+            close MXFILE;
+        }
+        else
+        {
+            $statsLine = "ERROR: [performBuild] Error opening $statsFile : $!";
+        }
+
+        umask($oldmask);
+    }
+    else
+    {
+      $statsLine = "Not written - no MAKEX_STATS_FILE variable set."
+    }
+
+    &note("INFO: [performBuild] Statistics: $statsLine"); 
+
+    return (wantarray ? ($rc, $statsLine) : $rc);
+}
+
+
+#===========================================================================
+# from makeme log the environment for the compilation command
+
+sub LogExecution($)
+{
+    my $cmd = shift;
+
+    # keep a copy the environment after makeme modifies it
+    system("printenv >> $DebugDir/postbld.env 2>&1");
+
+    # diff the two environment dumps
+    system("diff >> $DebugDir/env.diff $DebugDir/prebld.env $DebugDir/postbld.env 2>&1");
+
+    # append Make information to the info file
+    my $fname = "$DebugDir/build.info";
+    open(FILE, ">>$fname") || die "open: $fname: $!\n";
+    
+    print FILE "\n";
+    print FILE "Make Command\n";
+    print FILE "------------\n";
+    print FILE "Command: $cmd\n";
+    print FILE "Started: ".`date`;
+    close(FILE);
+
+    my ($rc, $statsLine) = &performBuild($cmd);
+        
+    open(FILE, ">>$fname") || die "open: $fname: $!\n";
+    print FILE "Finished: ".`date`;
+
+    if ($rc == -1)
+    {
+	print FILE "Problem with system(): $!\n";
+    }
+    elsif($rc & 0xff)
+    {
+	print FILE "Killed by signal: ", $rc & 0xff, "\n";
+    }
+    else
+    {
+	print FILE "Exit status: ", $rc >> 8, "\n";
+    }
+    
+    print FILE "Stats file: $statsLine\n";	
+    close(FILE);
+
+    return $rc & 0xffff;
+}
+
+
+#===========================================================================
+# setup history variables
+
+sub setupHistoryVars
+{
+    # Handy Globals
+    my $Today = `date +%Y%m%d_%H%M%S`;
+    chomp($Today);
+    
+    # DebugTopDir holds the debug directories (one per build)
+    $DebugTopDir="$Homedir/mastermind_build";
+    if (! -d $DebugTopDir)
+    {
+	mkdir($DebugTopDir, 0755) || die "mkdir $DebugTopDir: $!\n";
+    }
+    
+    $DebugDir;
+    # DebugDir will be used to keep debug information for an individual build
+    $DebugDir = "$DebugTopDir/build_$Today";
+    mkdir($DebugDir, 0755) || die "mkdir $DebugDir: $!\n";
+    
+    # KeepDebugDirs specifies how many debug directories to keep (eg. the last 6)
+    # Default is 6 unless the KEEP_DEBUG_DIRS environment variable is defined
+    $KeepDebugDirs = defined($ENV{KEEP_DEBUG_DIRS}) ? $ENV{KEEP_DEBUG_DIRS} : 6;
+    
+    # Ignore sigpipe signals
+    $SIG{"PIPE"} = 'IGNORE';
+}
+
+
+#===========================================================================
+# from makeme with a little change.
+
+sub UpdateExecutionHistory
+{
+    my $build = shift;
+
+    # Updates the execution log in the users home directory
+    my $DisplayMessage;
+
+
+    # PWD is a shell variable
+    my $currentPath = $ENV{PWD} ? $ENV{PWD} : `pwd`;
+
+    # Rebuild the command line as the user might have typed it
+    # put single quotes around the arguments that had spaces
+    my $cmdLine = $prog;
+    for (@ARGV)
+    {
+        $cmdLine .= (/\s/) ? " '$_'" : " $_";
+    }
+
+    # delete any old debug directories
+
+    my @dirs = split(/\n/, `ls -1r $DebugTopDir`);
+    @dirs = grep(/^build\_/, @dirs);
+
+    $KeepDebugDirs = 1 if($KeepDebugDirs<1);
+
+    for my $i ($KeepDebugDirs .. $#dirs)
+    {
+        system("rm -rf '$DebugTopDir/$dirs[$i]'");
+    }
+
+    # fill up the debug directory with informative files
+
+    my $fname = "$DebugDir/build.info";
+    open(FILE, ">$fname") || die "open: $fname: $!\n";
+    print FILE "User Name   : $User\n";
+    print FILE "Home Dir    : $Homedir\n";
+    print FILE "Current Path: $currentPath\n";
+    print FILE "Command Line: $cmdLine\n";
+    print FILE "Host        : ".`hostname`;
+    print FILE "\n";
+    print FILE "Subversion Information\n";
+    print FILE "----------------------\n";
+    print FILE `svn info $MASTERMIND_ROOT`;
+    print FILE "\n";
+    close FILE;
+
+    # copy the bld file
+    system("cp $build $DebugDir/build.bld");
+  
+    # keep a copy the environment before makeme modifies it
+    system("printenv > $DebugDir/prebld.env 2>&1");
+
+    # we must save the initial stdout and stderr to restore them later
+    open(SAVESTDOUT, ">&STDOUT");
+    open(SAVESTDERR, ">&STDERR");
+
+    # from this point on, tee the output to a build.log and the terminal
+    open(STDOUT, "| tee -a $DebugDir/build.log ") || die "can't tee: $!";
+    open(STDERR, ">&STDOUT") || die "STDERR: $!";
+}
+
+
+#===========================================================================
+# Gzip the build log file from makeme
+
+sub GzipBuildLog()
+{
+    # restore stdout and stderr (finishs tee process)
+    open(STDERR, ">&SAVESTDERR");
+    open(STDOUT, ">&SAVESTDOUT");
+
+    # these are here to appease perl -w
+    close(SAVESTDERR);
+    close(SAVESTDOUT);
+
+    # gzip the build.log in the background
+    if (-f "$DebugDir/build.log")
+    {
+	system("gzip $DebugDir/build.log &");
+    }
+}
+
+
+#===========================================================================
+# Start Processing Command-Line Parameters
+
+sub parseArg
+{
+    #-------------------------
+    # -flint specified
+    # Add "flint" to the list of targets to make
+    if ($opt{flint})
+    {
+        note "INFO: [parseArg] -flint specified.";
+        push(@makeTargets, "FLINT=defined");
+    }
+
+    #-------------------------
+    # -clean specified
+    # Add "clean" to the list of targets to make
+    if ($opt{clean})
+    {
+        note "INFO: [parseArg] -clean specified.";
+        push(@makeTargets, "clean");
+    }
+
+    #-------------------------
+    # -cleanall specified
+    # Add "cleanall" to the list of targets to make
+    if ($opt{cleanall})
+    {
+        note "INFO: [parseArg] -cleanall specified.";
+        push(@makeTargets, "cleanall");
+    }
+
+    #-------------------------
+    # -install specified
+    # Add "cleanall" to the list of targets to make
+    if ($opt{install})
+    {
+        note "INFO: [parseArg] -install specified.";
+        push(@makeTargets, "install");
+    }
+
+    #-------------------------
+    # -link_only specified
+    # Set LINK_ONLY to defined for this build
+    if ($opt{link_only})
+    {
+        note "INFO: [parseArg] -link_only specified.";
+        push(@makeArgs, "LINK_ONLY=defined");
+        push(@makeArgs, "LINK_MODULES_WITHOUT_RECOMPILE=defined");
+    }
+
+    #-------------------------
+    # -cflags specified
+    # Define OPT_CC_EXTRA and OPT_CXX_EXTRA for this build
+    if ($opt{cflags})
+    {
+        # Parse list of modules passed in with -module option
+        my $cflag_list = join(',',@{$opt{cflags}});
+        my @cflags = map {split /[$delim]/} $cflag_list;
+        note "INFO: [parseArg] -cflags specified with list: @cflags.";
+	
+        foreach my $cflag (@cflags)
+        {
+            $CFLAGS .= $cflag . " ";
+        }
+    }
+    
+    if ($CFLAGS ne "")
+    {
+        note "INFO: [parseArg] cflags is $CFLAGS\n";
+        push(@makeArgs, "OPT_CC_EXTRA='$CFLAGS'");
+        push(@makeArgs, "OPT_CXX_EXTRA='$CFLAGS'");
+    }
+
+    #-------------------------
+    # -file option specified
+    # Compiles with makefile specified
+    # This should be the last option to be checked.
+    if ($opt{file})
+    {
+        my $file_list = join(',',@{$opt{file}});
+        my @files = map {split /[$delim]/} $file_list;
+        note "INFO: [parseArg] -file specified with list: @files.";
+        push(@makefiles, @files);
+        compileMakefiles(\@makefiles, \@makeArgs, \@makeTargets);
+        exit(0);
+    }
+}
+
+
+#===========================================================================
+# FUNCTION:     usage
+# DESCRIPTION:  Outputs usage for makeX
+
+sub usage
+{
+    my $msg = shift;
+    my $rc = (defined($msg) && !$msg) ? 0 : 2;
+    if ($rc)
+    {
+        select STDERR;
+        print "$prog: Error: $msg\n\n" if $msg;
+    }
+    print <<EOF;
+
+Usage: $prog <build_key> [category] [module] [files...] [options]
+       $prog <build_key> [files...] [options]
+
+    * note that if there are more than one file specified, they should be
+      quoted using "" or ''.
+
+Flags:
+
+    -help		Print this message and exit
+    -verbose		Show debug information for $prog
+
+    -link_only          Link together modules without recompile
+
+    -flint       	Enables flinting during compile
+    -target=string      Makefile target
+    -cflags=string      Compile flags
+    -file=string        Compile with makefile given
+    -log                Enable logs for category, module and file build
+    -keep_env	        Disables cleaning up environment variables
+    -clean
+    -cleanall
+    -install
+
+Note:
+
+    * All flags may be abbreviated to their shortest unique name.
+
+Examples:
+
+    makeX LinuxConsoleApp                                               => Build Linux Console App 
+    makeX LinuxConsoleApp Analyzer                                      => Build category Analyzer
+    makeX LinuxConsoleApp Analyzer FrequencyAnalyzer                    => Build module FrequencyAnalyzer
+    makeX LinuxConsoleApp Analyzer FrequencyAnalyzer "CharFrequency.o"  => Build files
+    makeX LinuxConsoleApp.bld                                           => Build using build file specified
+    makeX LinuxConsoleApp -cflags="xxx yyy"                             => Build with extra cflags 
+    makeX LinuxConsoleApp -file=xxx.mk                                  => Build with a specify .mk
+
+EOF
+    exit $rc;
+}
+
+
+#===========================================================================
+# Make Top-down Build
+
+sub makeTopDown
+{
+    my $target_make = shift;
+    my $nArg        = shift;
+    my $category    = shift;
+    my $module      = shift;
+    my $files       = shift;
+
+    if ($nArg == 0)
+    {
+	note "INFO: [makeTopDown] Build target $target_make\n";
+
+	push(@makefiles, &retrieveExecMakefiles($target_make));	
+
+	# if any option specified other than -log, disable
+	# logging. This makes -nolog redundant, leave it in for now as
+	# rule may change later....
+	my $nOpt = keys(%opt);
+	note "INFO: [makeTopDown] nOpt:$nOpt\n";
+    }
+    else
+    {
+	if ($nArg == 1)
+        {
+	    note "INFO: [makeTopDown] Build category $category\n";
+	    my @categories = split(/ /, $category);
+	    foreach my $cat (@categories)
+            {
+		push(@makefiles, &retrieveCategoryMakefiles($cat, $target_make));	
+	    }
+	}
+	elsif ($nArg == 2)
+        {
+	    note "build module $module\n";
+	    my @modules = split(/ /, $module);
+	    foreach my $mod (@modules)
+            {
+		push(@makefiles, &retrieveModuleMakefiles($mod, $category, $target_make));	
+	    }
+	}
+	elsif ($nArg == 3)
+        {
+	    &makeFiles($category, $module, $target_make, $files);
+	}
+	
+    }
+
+    foreach my $mak (@makefiles)
+    {
+        note "INFO: [makeTopDown] Makefile $mak";
+    }
+
+    &compileMakefiles(\@makefiles, \@makeArgs, \@makeTargets);
+}
+
+
+#===========================================================================
+# make bottom up build
+
+sub makeBottomUp
+{
+    my $target_make = shift;
+    my $files       = shift;
+
+    my $target = &findCurrentTarget();
+    die ("Error: build \"$TARGET\" specified does not match the view for target \"$target\"") unless ($target eq $TARGET);
+
+    my $category = &findCurrentCategory();
+    my $module   = &findCurrentModule($category);
+
+    &makeFiles($category, $module, $target_make, $files);
+
+    &compileMakefiles(\@makefiles, \@makeArgs, \@makeTargets);
+}
+
+
+#===========================================================================
+# make or compile files
+
+sub makeFiles
+{
+    my $category    = shift;
+    my $module      = shift;
+    my $target_make = shift;
+    my $files       = shift;
+
+    note "INFO: [makeFiles] build file $files\n";
+    my $obj_dir = &getModuleHomePath($category, $module);
+    if ($files =~ /\.o/)
+    {
+        $obj_dir = "$obj_dir/obj/$target_make$arch_type";
+    }
+    elsif ($files =~ /\.flint/)
+    {
+        $obj_dir = "$obj_dir/flint/$target_make$arch_type";
+    }
+    else
+    {
+        warn "Error: do not know how to build file '$files'\n";
+        warn "       use extension .o or .flint\n";
+        exit(1);
+    }
+
+    my @objfiles = split(/ /,$files);
+    
+    note "INFO: [makeFiles] objfiles @objfiles\n";
+    foreach my $obj (@objfiles)
+    {
+        push (@makeTargets,"$obj_dir/$obj");
+    }
+
+    push(@makefiles, &retrieveModuleMakefiles($module, $category, $target_make));	
+}
+
+
+#===========================================================================
+# Get BLD file string with given description
+# Still need to decide the format of the filename
+
+sub getBldStr
+{
+    my $startBldDir = $MASTERMIND_ROOT;
+    my $bld         = shift;
+    
+    my @filelist;
+    if ($bld =~ /\./)
+    {
+        @filelist = `find $startBldDir  -type f -follow -name $bld`;
+    }
+    else
+    {
+        @filelist = `find $startBldDir  -type f -follow -name '$bld*.bld'`;
+    }
+ 
+    if ($#filelist == -1)
+    {
+        die ("Error: build key '$bld' is unknown\n");
+    }
+    elsif ($#filelist > 0)
+    {
+        die ("Error: build key '$bld' given matches more than one bld filelist:\n @filelist\n");
+    }
+
+    my $bldfile = @filelist[0];
+    chomp($bldfile);
+
+    return $bldfile;
+}
+
+
+#===========================================================================
+# Determine the BLD file name
+
+sub findBldFile
+{
+    my $arg = shift;
+
+    if (-f $arg && $arg =~ /\.bld/)
+    {
+        return $arg;
+    }
+
+    my $bld = &getBldStr($arg);
+
+    if (-f $bld)
+    {
+        return $bld;
+    }
+    else
+    {
+        die ("Error: unknown build file $arg\n");
+    }
+}
+
+
+#===========================================================================
+# Environment Verification
+#    Store Environment Variables
+#    UTIL_ROOT is used to locate the Clearcase perl libraries.
+#    BUILD_ROOT is the vob tag for the environment
+#    GO_PATH is the last path visited by the "go" script.
+#    BUILD_MAKE_CMD is the make command to be used.
+#    BUILD_ID is the unique name required for the name of the final product
+
+sub verifyEnv
+{
+    my $build = shift;
+
+    note "INFO: [verifyEnv] found $build";
+    
+    &readBLD($build);
+    
+    $UTIL_ROOT      = $ENV{UTIL_ROOT};
+    $GO_PATH        = $ENV{GO_PATH};
+    $BUILD_MAKE_CMD = $ENV{BUILD_MAKE_CMD};
+    $BUILD_ID       = $ENV{BUILD_ID};
+    $TARGET         = $ENV{TARGET};
+    $LOAD           = $ENV{LOAD};
+    $target_make    = $ENV{TARGET};
+    $arch_type      = $ENV{ARCH_TYPE};
+    
+    $TARGET_PATH = "$MASTERMIND_ROOT/Build/Target/$TARGET";
+    
+    my $err = "";
+
+    # Verify environment variables
+    if ($UTIL_ROOT eq "")
+    {
+        $err = "ERROR: Environment variable UTIL_ROOT is not defined.\nUTIL_ROOT is the location of the scripts used by loadbuild.\n";
+        die($err);
+    }
+    if ($BUILD_MAKE_CMD eq "")
+    {
+        $err = "ERROR: Environment variable BUILD_MAKE_CMD is not defined.\nBUILD_MAKE_CMD is the make command used to compile makefiles.\n";
+        die($err);
+    }
+    if ($BUILD_ID eq "")
+    {
+        $err = "ERROR: Environment variable BUILD_ID is not defined. BUILD_ID
+                is required to give the executable name a unique id.
+                Use setenv BUILD_ID <your_id>.\n";
+	die($err);
+    }
+    if ($target_make eq "")
+    {
+        $err = "ERROR: Environment variable TARGET is not defined.\n";
+        die ($err);
+    }
+}
+
+
+my %compareTable;
+BEGIN
+{
+    $compareTable{ $_} = eval "sub { \$_[ 0] $_ \$_[ 1]}" for
+        qw( eq ne == != ); # add more comparison operators as needed
+}
+
+
+#===========================================================================
+# evaluate an expr in string format and return 1 or none
+
+sub evalExpr
+{
+    my ( $operand1, $operator, $operand2) = split ' ', $_[ 0];
+    die "Unsupported comparison: $operator" unless $compareTable{$operator};
+    $operand1 = &expandVar($operand1);
+    $operand2 = &expandVar($operand2);
+    note "INFO: [evalExpr] $operand1:$operand2 \n";
+    $compareTable{ $operator}->( $operand1, $operand2);
+}
+
+
+#===========================================================================
+# check the if condition.
+
+sub checkCondition
+{
+    my $expr = shift;
+    $ifCond = &evalExpr($expr) if ($ifBit & 0x1);
+    $ifBit = ($ifBit << 1) + $ifCond;
+}
+
+
+#===========================================================================
+# FUNCTION:     readBLD($BldFilename, $DebugLevel)
+# DESCRIPTION:  Takes the BLD file, sets enviornment variables, and
+#               the path.  Returns (\%BLDdata, \%CMDLines).  
+
+sub readBLD
+{
+    my $BLDname    = shift;
+
+    $BLDname = &expandVar($BLDname);
+    
+    # Initialize CMD and BLD data hash tables
+    my %CMDlines;
+    my %BLDdata;
+
+    # Get and open BLD file
+    if (defined($BLDname)) 
+    {
+        open(BLD, $BLDname) or die "BLD parser: Critical failure: BLD 
+        file \"$BLDname\" not found!!\nEnsure you gave a file to parse\n\n";
+    } 
+    else 
+    {
+        die "BLD parser: Critical failure:  BLD file not found!!\n
+        Ensure you gave a file to parse\n\n";
+    }
+
+    note "INFO: [readBLD] Working with BLD file : $BLDname";
+
+
+    # Parse the bpf makefile line by line
+    while (<BLD>) 
+    {
+        # Increment line number of BLD file.
+        ++$linenum;
+
+        # ignore comments and blank lines
+        if (/^\s*#/ || /^\s*$/) 
+        { 
+            next; 
+        }
+	
+        # Look for bad line types.  All lines should start with a # or have a :
+        if (! /:/) 
+        { 
+            die "BLD Decoder: Critical Error!\n** Line $linenum is 
+            incorrectly formatted!!\n** See the BLD guide for 
+            formatting instructions\n\n"; 
+        }  
+
+  
+        # Take line in BPF file and split data into tokens in the array
+        my $bpfline = $_;
+        chomp $bpfline;
+        my @data = split /\s*:\s*/, $bpfline;
+
+        # For each token, store in the $Type, $Key and $Value variable
+        # First token contains Type
+        my $Type = $data[0];
+	$Type =~ s/^ *//g;
+        my $Key;
+        my $Value;
+
+        # Second token contains Key
+        if (defined $data[1]) 
+        {
+            $Key = $data[1];
+        } 
+        else 
+        {
+            $Key = "";
+        } 
+
+        # Third token contains Value
+        if (defined $data[2]) 
+        {
+            $Value = $data[2];
+        } 
+        else 
+        {
+            $Value = "";
+        }
+        
+        # Any additional tokens are joined with Value
+        if (defined $data[3]) 
+        {
+            $Value = join ':', $Value, @data[3 .. $#data]; 
+        }
+
+        # If $Key or $Value begins with an angle bracket (<) then skip
+        if ($Value =~ /^</) 
+        { 
+            print "BPF decoder: Warning!\n** Line $linenum, Key \"$Key\" has 
+            no value.\n\n"; 
+            next;
+        }
+        if ($Key   =~ /^</) 
+        { 
+            print "BPF decoder: Warning!\n** Line $linenum, 
+            Type \"$data[0]\" has no Key or Value.\n\n"; 
+            next;
+        }
+
+	if (!$ifCond && ($Type ne "endif") && ($Type ne "if")){
+	   next;
+	}
+
+        # Depending on the $Key, set the appropriate value.
+        SWITCH: 
+        {
+            # Set the environment variable
+            if ($Type eq "envVar") 
+            { 
+                &setEnvVar($Key, $Value);
+                last SWITCH; 
+            }
+
+            # Set the environment variable (same as envVar)
+            if ($Type eq "setenv") 
+            { 
+                &setEnvVar($Key, $Value);
+                last SWITCH; 
+            }
+            
+            # Undefine the environment variable
+            if ($Type eq "unsetenv") 
+            { 
+                &unSetEnvVar($Key);
+                last SWITCH; 
+            }
+            
+	    # read another bpf file
+	    if ($Type eq "include")
+            {
+                #Dup the filehandler
+                local *SAVEHDR;
+                open SAVEHDR, "<&BLD";
+
+                #Save the duplicated file handler in a typeglob array 
+                push @fileHandlers, *SAVEHDR;
+
+                &readBLD($Key);
+		
+                #recover the filehandle
+                *BPF = pop @fileHandlers;
+		
+                last SWITCH;
+            }
+
+            # if condition
+            if ($Type eq "if")
+            {
+                &checkCondition($Key);
+                note "if:$ifCond\n";
+                last SWITCH;
+            }
+
+            # if condition
+            if ($Type eq "endif")
+            {
+                note "endif:$ifCond\n";	    
+                $ifBit >>= 1;
+                $ifCond = $ifBit & 0x1;
+                last SWITCH;
+            }
+
+            # echo
+            if ($Type eq "echo")
+            {
+                print "$Key\n";
+                last SWITCH;
+            }
+
+	    # exit
+            if ($Type eq "exit")
+            {
+                exit($Key);
+                last SWITCH;
+            }
+
+            # Default SWITCH rule
+            warn "Line $linenum contains an unknown type.
+            \n Valid types are: envVar, symLink, path, bldData";
+        }
+    }
+
+    # Returns bldData and cmdLines as an array
+    return (\%BLDdata, \%CMDlines);
+}
+
+
+sub expandVar
+{
+    my $value = shift;
+
+    if ($value =~ /[\$\`]/)
+    {
+	$value = `echo $value`;
+    }
+
+    chomp($value);
+    return $value;
+}
+
+
+#===========================================================================
+# FUNCTION:     setEnvVar($EnvVar, $Value)
+# DESCRIPTION:  Sets $EnvVar to $Value in the environment.
+
+sub setEnvVar
+{
+    my $EnvVar = shift;
+    my $Value  = shift;
+
+    note "INFO: [setEnvVar] Setting environment variables."; 
+    
+    if ($EnvVar eq "") 
+    { 
+        die "BPF decoder: Fatal Error!!\n** Line $linenum, 
+        Environment variable needs a name!\n** Line $linenum 
+        contains a type \"$EnvVar\" with no key name!!\n"; 
+    }
+    
+    if ($Value eq "") 
+    { 
+        print "BPF decoder: Warning!!\n** Setting environment 
+        variable \"$EnvVar\" to <NULL> (nothing)\n\n"; 
+    }
+
+    if ($ENV{$EnvVar} eq $EnvVar) 
+    { 
+        print "BPF decoder: Warning!!\n** Environment variable 
+        \"$EnvVar\" is currently set to \"$ENV{$EnvVar}\"\n** This will 
+        be overwritten with \"$Value\" for the duration of the build!!\n\n"; 
+    }
+
+    # Set environment variable "key" to "value".
+    $ENV{$EnvVar} = &expandVar($Value);
+    note "INFO: [setEnvVar] $EnvVar set to $ENV{$EnvVar}\n";
+}
+
+
+#===========================================================================
+# FUNCTION:     unSetEnvVar($EnvVar)
+# DESCRIPTION:  Sets $EnvVar to $Value in the environment.
+
+sub unSetEnvVar
+{
+    my $EnvVar = shift;
+    my $Value  = shift;
+
+    note "INFO: [unSetEnvVar] Unsetting environment variables."; 
+    
+    if ($EnvVar eq "") 
+    { 
+        die "BPF decoder: Fatal Error!!\n** Line $linenum, 
+        Environment variable needs a name!\n** Line $linenum 
+        contains a type \"$EnvVar\" with no key name!!\n"; 
+    }
+    
+
+    if ($ENV{$EnvVar} eq $EnvVar) 
+    { 
+        print "BPF decoder: Warning!!\n** Environment variable 
+        \"$EnvVar\" is currently set to \"$ENV{$EnvVar}\"\n
+        ** This will be undefined for the duration of the build!!\n\n"; 
+    }
+
+    # Unset environment variable "key".
+    $ENV{$EnvVar} = &expandVar($Value);
+    note "INFO: [unSetEnvVar] $EnvVar undefined\n";
+}
+
+
+#===========================================================================
+# FUNCTION:     note($string)
+# DESCRIPTION:  Prints message if verbose option has been set.
+
+sub note
+{
+    print STDERR "$prog: @_\n" if $opt{verbose};
+}
+
+
+#===========================================================================
+# FUNCTION:     retrieveExecMakefiles($target)
+# DESCRIPTION:  Takes the executable name and returns a list of makefiles
+#               ending with a suffix "$target.mk".  Makefiles have their
+#               full path.
+
+sub retrieveExecMakefiles
+{
+    my $target = shift;
+
+    note "INFO: [retrieveExecMakefiles] Finding makefiles for $target.";
+
+    my $executableHome = &getExecutableHomePath();
+    my $buildPath      = "$executableHome/bld";
+
+    return &findMakefiles($buildPath, $target);
+}
+
+
+#===========================================================================
+# FUNCTION:     retrieveCategoryMakefiles($category, $target)
+# DESCRIPTION:  Takes the category name and returns a list of makefiles
+#               ending with a suffix "$target.mk".  Makefiles have their
+#               full path.
+
+sub retrieveCategoryMakefiles
+{
+    my $category = shift;
+    my $target   = shift;
+    note "INFO: [retrieveCategoryMakefiles] Finding makefiles for $category.";
+
+    my $buildPath = &getCategoryHomePath($category)."/bld";
+    note "INFO: [retrieveCategoryMakefiles] buildPath $buildPath";
+
+    return &findMakefiles($buildPath, $target);
+}
+
+
+#===========================================================================
+# FUNCTION:     retrieveModuleMakefiles($module, $domain, $target)
+# DESCRIPTION:  Takes the module name and returns a list of makefiles
+#               ending with a suffix "$target.mk".  Makefiles have their
+#               full path.
+
+sub retrieveModuleMakefiles
+{
+    my $module   = shift;
+    my $category = shift;
+    my $target   = shift;
+
+    my $buildPath = &getModuleHomePath($category, $module)."/bld";
+
+    return &findMakefiles($buildPath, $target);
+}
+
+
+#===========================================================================
+# fine makefiles for a given path and target.
+
+sub findMakefiles
+{
+    my $buildPath = shift;
+    my $target    = shift;
+
+    # these variables can be passed as parameters if necessary.
+    my $makePattern =  qr(^.*$target\.mk$);
+    my $excludePattern = " ";
+
+    my @filelist;
+    if ($opt{use_wildcard}) 
+    {
+       @filelist = &findFiles($buildPath, $makePattern, $excludePattern);
+    }
+    elsif (($buildPath =~ /module\/(.*)\/bld/) || ($buildPath =~ /category\/(.*)\/bld/))
+    {
+       @filelist = $buildPath . "/" . $target . ".mk";
+    }
+    elsif($buildPath =~ /Target\/.*\/bld/)
+    {
+       @filelist = $buildPath . "/" . $target . ".mk";
+    }
+    
+    if (scalar(@filelist) == 0)
+    {
+        warn "No makefiles found in $buildPath with $target.mk suffix\n";
+    }
+
+    note "INFO: [findMakefiles] Found @filelist in $buildPath";
+    return @filelist;
+}
+
+
+#===========================================================================
+# This routine determines the name of the current target from current directory
+
+sub findCurrentTarget()
+{ 
+    my $target = &findNextDir("$MASTERMIND_ROOT");
+
+    if ($target eq "")
+    {
+	my $curDir = getcwd;
+	my $err = "Cannot determine target from cwd=$curDir and GO_PATH=$GO_PATH";
+	die ($err);
+    }
+    
+    return $target;
+}
+
+
+#===========================================================================
+# This routine determines the name of the current category from current directory
+
+sub findCurrentCategory
+{ 
+    my $category = &findNextDir(&getTargetPath()."/category");
+    
+    if ($category eq "")
+    {
+        my $curDir = getcwd;
+        my $err    = "Cannot determine domain from cwd=$curDir and GO_PATH=$GO_PATH";
+        die ($err);
+    }
+
+    return $category;
+}
+
+
+#===========================================================================
+# This routine determines the name of the current module from current directory
+
+sub findCurrentModule
+{ 
+    my $category = shift;
+    my $module   = &findNextDir(&getCategoryHomePath($category)."/module");
+    
+    if ($module eq "")
+    {
+        my $curDir = getcwd;
+        my $err    = "Cannot determine module from cwd=$curDir and GO_PATH=$GO_PATH";
+        die ($err);
+    }
+
+    return $module;
+}
+
+
+#===========================================================================
+# find X where X is "$prefix/X"
+
+sub findNextDir()
+{
+    my $curDir  = getcwd;
+    my $prefix  = shift;
+    my $nextDir = "";
+
+    if ($curDir =~ /$prefix\/(.*)/)
+    {
+        $nextDir = $1;
+    }
+    elsif ($GO_PATH =~ /$prefix\/(.*)/)
+    {
+        $nextDir = $1;
+    }
+  
+    if ($nextDir =~ /(\w+)\/.+/)
+    {
+        $nextDir = $1;
+    }
+
+    return ($nextDir);
+}
+
+
+#===========================================================================
+# FUNCTION:     findFiles ($path, $matchPattern, $excludePattern)
+# DESCRIPTION:  Returns absolute path files in path that matches 
+#               "matchPattern", and excludes files that match 
+#               "excludePattern".
+
+sub findFiles
+{
+    my $path           = shift;
+    my $matchPattern   = shift;
+    my $excludePattern = shift;
+    my @filteredList;
+    my $file;
+    my @filelist;
+
+    # Opens the directory and stores the filelist    
+    if (opendir(DIR, $path))
+    {
+        @filelist = readdir(DIR);
+        closedir(DIR);
+    }
+    else
+    {
+        warn "Warning: Directory $path does not exist.\n";
+    }
+
+    # Output all files in directory:
+    note "INFO: [findFiles] files in $path: @filelist.";
+    note "INFO: [findFiles] match pattern: $matchPattern.";
+    note "INFO: [findFiles] exclude pattern: $excludePattern.";
+
+    # Iterate through filelist and look for files that match pattern
+    # and do not match exclusion pattern.
+    foreach $file (@filelist)
+    {
+        if ($file =~ /$matchPattern/)
+        {
+            if ($file =~ /$excludePattern/)
+            {
+                note "INFO: [findFiles] excluding $file.";
+            }
+            else
+            {
+                note "INFO: [findFiles] matched $file.";
+                $file = "$path\/$file";
+                push(@filteredList, $file);
+            }
+        }
+    }
+    
+    note "INFO: [findFiles] match list: @filteredList.";
+    return @filteredList;
+}
+
+
+#===========================================================================
+# FUNCTION:     compileMakefiles (\@makefiles, \@makeargs, \@maketargetRefs)
+# DESCRIPTION:  Returns files in path that matches "matchPattern", and
+#               excludes files that match "excludePattern".
+
+sub compileMakefiles
+{
+    my $makefilesRef   = shift;
+    my $makeargsRef    = shift;
+    my $maketargetsRef = shift;
+
+    my $argsStr = join(" ", @{$makeargsRef});
+    my $targetsStr = join (" ", @{$maketargetsRef});
+    
+    if ($enableLogs)
+    {
+        &setupHistoryVars();
+
+        print "Setting up the build logs in $DebugTopDir ...\n";
+        &UpdateExecutionHistory($Build);
+    }
+
+    foreach my $makefile (@{$makefilesRef})
+    {
+	my $makepath = "$TARGET_PATH/bin/$target_make";
+	my $curDir   = getcwd;
+
+	if (-e "$curDir/$makefile")
+	{   # use the absolute path
+	    $makefile = "$curDir/$makefile";
+	}
+
+	# change dir to where the lip file is, and so .cmake.state end 
+	# up in this directory and also the build does not pickup 
+	# wrong source file from current directory.
+	chdir($makepath);
+	print "Change directory to '$makepath'\n";
+        my $cmd = "$BUILD_MAKE_CMD -f $makefile $argsStr $targetsStr";
+        print "\n*** START COMPILE OF $makefile\n\n";
+        print "   $cmd\n";
+	if ($enableLogs)
+        {
+            &LogExecution($cmd);
+	}
+	else
+        {
+            &performBuild($cmd);
+	}
+
+        print "\n*** END COMPILE OF $makefile\n\n";        
+    }
+}
+
+
+#===========================================================================
+# FUNCTION:     getCategoryHomePath($category)
+# DESCRIPTION:  Returns the proper construction of the category home path.
+#               This centralizes the form of the path in this function.
+
+sub getCategoryHomePath
+{
+    my $category = shift;
+    return &getTargetPath()."/category/$category";
+}
+
+
+#===========================================================================
+# FUNCTION:     getExecutableHomePath ($executable)
+# DESCRIPTION:  Returns the proper construction of the executable path.
+#               This centralizes the form of the path in this function.
+
+sub getExecutableHomePath
+{
+    return &getTargetPath();
+}
+
+
+#===========================================================================
+# get the path for the target
+
+sub getTargetPath
+{
+    return "$TARGET_PATH";
+}
+
+
+#===========================================================================
+# get the path for the module.
+
+sub getModuleHomePath
+{
+    my $category      = shift;
+    my $module        = shift;
+    my $category_path = &getCategoryHomePath($category);
+
+    return "$category_path/module/$module";
+}
+
+
+#===========================================================================
+# Clean up the environment variables
+
+sub cleanENV
+{
+    my $key;
+    foreach $key (keys %ENV)
+    {
+        #Remove all the environment variables except:
+        #MASTERMIND_ROOT and BUILD_ID which are used by load build,
+        #and all clearcase environment varaibles, 
+        #CCASE_*, CLEASECASE_*, BITMAP_PATH, ICON_PATH, MAGIC_PATH, MAKEFLAGS, 
+        #MANPATH and SHELL
+        #LAUNCH_NASA is for Nortel Automated Static Analysis
+	
+        my $tmp;
+        foreach $tmp (@envList)
+        {
+            goto NEXTKEY if ($key =~ /$tmp/);
+        }
+
+        note "INFO: [cleanENV] Deleting environment key $key";      
+        delete $ENV{$key}; 
+      
+        NEXTKEY:
+    }
+}    
+
+

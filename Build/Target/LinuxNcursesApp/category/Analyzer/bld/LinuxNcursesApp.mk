@@ -1,0 +1,1 @@
+../../../../../../App/Analyzer/bld/LinuxNcursesApp.mk

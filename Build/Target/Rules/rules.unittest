@@ -1,0 +1,129 @@
+#==============================================================================
+# rules.unittest
+#
+# This file contains rules for building targets.
+#
+#==============================================================================
+
+#==============================================================================
+# Default Build
+#==============================================================================
+
+.PHONY: all
+
+all: $(TEST_TARGET)
+	@$(TIMESTAMP)
+
+
+#==============================================================================
+# Developer Defined Build Additions
+#
+# This provides additional flexibility for users who want do extra things
+# without impacting the default rules or makefiles.
+#==============================================================================
+
+#include $(BLD_DIR)/macros.extra
+
+
+#==============================================================================
+# Rules for Development tools
+#==============================================================================
+
+#include $(RULES_ROOT)/rules.flint
+
+
+#==============================================================================
+# All targets have the export and component include path by default.
+#==============================================================================
+
+INCLUDE_STD := \
+            -I/usr/include/libxml2 \
+            -I/usr/include/unittest++ \
+            -I$(INC_DIR) \
+            -I$(EXPORT_DIR)
+
+
+#==============================================================================
+# Defines, Flags and Include Paths
+#==============================================================================
+
+ASMFLAGS := $(OPT_ASM_STD) $(OPT_ASM_MOD) $(OPT_ASM_CATEGORY) $(OPT_ASM_TARGET) $(OPT_ASM_EXTRA)
+CFLAGS   := $(OPT_CC_STD) $(OPT_CC_MOD) $(OPT_CC_CATEGORY) $(OPT_CC_TARGET) $(OPT_CC_EXTRA)
+CXXFLAGS := $(OPT_CXX_STD) $(OPT_CXX_MOD) $(OPT_CXX_CATEGORY) $(OPT_CXX_TARGET) $(OPT_CXX_EXTRA)
+LDFLAGS  := $(OPT_LD_STD) $(OPT_LD_MOD) $(OPT_LD_EXTRA)
+
+DEFINES  := $(DEF_STD) $(DEF_MOD) $(DEF_CATEGORY) $(DEF_TARGET) $(DEF_EXTRA)
+INCLUDES := $(INCLUDE_STD) $(INCLUDE_MOD) $(INCLUDE_EXTRA)
+
+
+#==============================================================================
+# RULES FOR GENERATION OF VARIOUS MODULE OBJECTS
+#==============================================================================
+
+#==============================================================================
+# Rule: TEST MODULE OBJECT from C++ CODE in $(TEST_DIR)
+#       Do not flint if AVOID_FLINT is defined.
+#
+
+ifdef FLINT
+$(TEST_DIR)/$Test(MODULE)_Main.otest: $(TEST_DIR)/Test$(MODULE)_Main.cpp $(FLINT_DIR)/%.flint
+else
+$(TEST_DIR)/$Test(MODULE)_Main.otest: $(TEST_DIR)/Test$(MODULE)_Main.cpp
+endif
+	@$(TIMESTAMP)
+	$(CXX) $(CXXFLAGS) $(DEFINES) $(INCLUDES) -c $< -o $@;
+
+ifdef FLINT
+$(TEST_DIR)/%.otest : $(TEST_DIR)/%.cpp $(FLINT_DIR)/%.flint 
+else
+$(TEST_DIR)/%.otest : $(TEST_DIR)/%.cpp
+endif
+	@$(TIMESTAMP)
+	$(CXX) $(CXXFLAGS) $(DEFINES) $(INCLUDES) -c $< -o $@;
+
+ifdef FLINT
+$(TEST_DIR)/%.otest : $(SRC_DIR)/%.cpp $(INC_DIR)/%.hpp $(FLINT_DIR)/%.flint 
+else
+$(TEST_DIR)/%.otest : $(SRC_DIR)/%.cpp $(INC_DIR)/%.hpp
+endif
+	@$(TIMESTAMP)
+	$(CXX) $(CXXFLAGS) $(DEFINES) $(INCLUDES) -c $< -o $@;
+
+
+#==============================================================================
+# RULES FOR GENERATION OF VARIOUS MODULE LIBRARIES
+#==============================================================================
+
+#==============================================================================
+# Rule: STATIC LIBRARY
+#       
+
+$(TEST_DIR)/lib%.a : $(TEST_DIR)/%.otest 
+	@$(TIMESTAMP)
+	$(AR) -rcs $@ $<
+
+
+#==============================================================================
+# Rule: TEST TARGET
+#
+
+$(TEST_TARGET) : $(OBJS_TO_LINK) $(LIBS_TO_LINK) 
+	@$(TIMESTAMP)
+	$(LD) $(OPT_LD_STD) -o $@ $(OBJS_TO_LINK) $(OPT_LD_MOD) $(SYSTEM_LIBS)
+
+
+#==============================================================================
+# Clean Rule
+#
+
+.PHONY: clean
+clean:
+	$(RM) $(TEST_DIR)/*.otest
+#	$(RM) $(FLINT_DIR)/*
+
+.PHONY:
+cleanall: clean
+	$(RM) $(LIBS_TO_LINK)
+	$(RM) $(TEST_TARGET)
+
+

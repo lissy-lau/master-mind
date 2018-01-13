@@ -1,0 +1,44 @@
+#==============================================================================
+# Build Parameters File for Linux Ncurses Application 
+#==============================================================================
+
+# Determine Host Type and Location for Specific Environments
+setenv: OSNAME:              `uname -s`
+
+# Host Dependant Defines
+if: $OSNAME ne Linux
+echo: *** Invalid Host - Please build under Linux! ***
+exit: 1
+endif:
+
+setenv: HOST_TYPE:           Linux
+
+# DTHELPSEARCHPATH creates linking errors in the build
+unsetenv: DTHELPSEARCHPATH:
+unsetenv: XMICONSEARCHPATH:
+unsetenv: DTAPPSEARCHPATH:
+unsetenv: MANPATH:
+
+# The following variables are used in macros.default to expand paths. 
+# They are defined in the makefile whichs "includes macros.default"
+unsetenv: MODULE:
+unsetenv: CATEGORY:
+unsetenv: BUILD:
+
+# Target Specific
+setenv: OS:                  Linux
+setenv: CPU:                 i386
+setenv: UI:                  Ncurses
+setenv: TOOL:                gnu
+setenv: BUILD_NAME:          LinuxNcursesApp
+setenv: TARGET:              LinuxNcursesApp
+
+setenv: BUILD_ROOT:          ${MASTERMIND_ROOT}
+setenv: MAP_ROOT:            ${BUILD_ROOT}/Build/Target
+setenv: UTIL_ROOT:           ${MAP_ROOT}/Util
+setenv: RULES_ROOT:          ${MAP_ROOT}/Rules
+
+# Clearcase Environment
+setenv: BUILD_MAKE_CMD:       make
+setenv: CCASE_BLD_UMASK:      007
+

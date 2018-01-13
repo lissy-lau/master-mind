@@ -1,0 +1,131 @@
+#==========================================================================
+# macros.default
+#
+# Purpose of File:
+# * This file contains definitions of variables that are used
+#   by all targets and environments.
+#
+#==========================================================================
+
+#==========================================================================
+# Check build specific environment variables
+#==========================================================================
+
+ifndef MAP_ROOT
+    ERROR += "\nMAP_ROOT is not defined!\n"
+endif
+
+ifndef TARGET
+    ERROR += "\nTARGET is not defined!\n"
+endif
+
+ifdef ERROR
+.PHONY: err
+err:
+	@echo $(ERROR)
+	@exit 1
+endif
+
+
+#==========================================================================
+# Category Paths
+#==========================================================================
+
+CATEGORY_ROOT        := $(MAP_ROOT)/$(TARGET)/category
+export ANALYZER_ROOT := $(CATEGORY_ROOT)/Analyzer/module
+
+
+#==========================================================================
+# Category Interfaces
+#==========================================================================
+
+export ANALYZER_EXPORT := $(CATEGORY_ROOT)/Analyzer/export
+
+
+#==========================================================================
+# Module Directory Structure
+#==========================================================================
+
+ifdef MODULE
+PROGRAM      := $(MODULE)
+MOD_DIR      := $(CATEGORY_ROOT)/$(CATEGORY)/module/$(MODULE)
+BLD_DIR      := $(MOD_DIR)/bld
+BIN_DIR      := $(MOD_DIR)/bin/$(TARGET)
+OBJ_DIR      := $(MOD_DIR)/obj/$(TARGET)
+LIB_DIR      := $(MOD_DIR)/lib/$(TARGET)
+#FLINT_DIR    := $(MOD_DIR)/flint/$(TARGET)
+INC_DIR      := $(MOD_DIR)/include
+EXPORT_DIR   := $(CATEGORY_ROOT)/$(CATEGORY)/export
+SRC_DIR      := $(MOD_DIR)/src
+TEST_DIR     := $(MOD_DIR)/unittest
+BUILD_TARGET += $(BIN_DIR)/$(PROGRAM)
+TEST_TARGET  := $(TEST_DIR)/Test$(PROGRAM)
+# Ensure these are undefined
+CATEGORY     :=
+BUILD        :=
+endif # MODULE directory structure
+
+
+#==========================================================================
+# Category Directory Structure
+#==========================================================================
+
+ifdef CATEGORY
+PROGRAM      := $(CATEGORY)
+CATEGORY_DIR := $(CATEGORY_ROOT)/$(CATEGORY)
+BLD_DIR      := $(CATEGORY_DIR)/bld
+BIN_DIR      := $(CATEGORY_DIR)/bin/$(TARGET)
+OBJ_DIR      := $(CATEGORY_DIR)/obj/$(TARGET)
+LIB_DIR      := $(CATEGORY_DIR)/lib/$(TARGET)
+#FLINT_DIR    := $(CATEGORY_DIR)/flint/$(TARGET)
+INC_DIR      := $(CATEGORY_DIR)/export
+BUILD_TARGET += $(BIN_DIR)/$(PROGRAM)
+# Ensure these are undefined
+BUILD        :=
+endif # CATEGORY directory structure
+
+
+#==========================================================================
+# Build directory structure
+#==========================================================================
+
+ifdef BUILD
+BUILD_DIR    := $(MAP_ROOT)/$(TARGET)
+BLD_DIR      := $(BUILD_DIR)/bld
+BIN_DIR      := $(BUILD_DIR)/bin/$(TARGET)
+LIB_DIR      := $(BUILD_DIR)/lib/$(TARGET)
+BUILD_TARGET := $(BIN_DIR)/$(BUILD)
+endif # BUILD directory structure
+
+
+#==========================================================================
+# Environment    
+#==========================================================================
+
+DATE             := $(shell date '+%n20%y-%h-%d %H:%M:%S%n' | sed s/\\n//)
+TIMESTAMP        := date '+%n20%y-%h-%d %H:%M:%S%n'
+INSTALL_BIN_PATH := /usr/local/master-mind/bin
+INSTALL_LIB_PATH := /usr/local/master-mind/lib
+
+
+#==========================================================================
+# Target Tools and Environment
+#==========================================================================
+
+include $(RULES_ROOT)/macros.$(TARGET)
+
+
+# These macros must be *after* macros.$(TARGET) which defines $CC & $C++
+
+#==============================================================================
+# CoverageScope instumentor (David H. Wong 2004/01/26)
+#==============================================================================
+
+#CSCOPE_CC  := $(subst  $(CC),coverage $(CSCOPE_FLAGS) $(CC),$(CC))
+#CSCOPE_C++ := $(subst $(C++),coverage $(CSCOPE_FLAGS) $(C++),$(C++))
+
+# Scope of coverage - no pun intended!
+#CSCOPE_THIS_MODULE := CSCOPE_$(CSCOPE_DOMAIN)_$(MODULE)
+#CSCOPE_THIS_DOMAIN := CSCOPE_$(CSCOPE_DOMAIN)
+
+

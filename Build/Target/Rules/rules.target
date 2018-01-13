@@ -1,0 +1,90 @@
+#==============================================================================
+# rules.LinuxConsoleApp
+#
+# This file contains rules for building target executables.
+#==============================================================================
+
+#===============================================================================
+# Default rule
+#===============================================================================
+.PHONY: all
+all: $(BUILD_TARGET)
+	@ $(TIMESTAMP)
+	@ echo "FINISHED BUILDING: $(BUILD) in $(TARGET) "
+
+
+#==============================================================================
+# Developer defined build additions
+#
+# This provides additional flexibility for users who want to do extra things
+# without impacting the default rules or makefiles.
+#
+# See $BUILD_ROOT/templates/macros.extra for an example of its usage.
+#==============================================================================
+
+#include $(BLD_DIR)/macros.extra
+
+
+#==============================================================================
+# Rules for development tools.
+#==============================================================================
+
+
+#==============================================================================
+# Build Flags
+#==============================================================================
+
+LDFLAGS := $(OPT_LD_STD) $(OPT_LD_EXTRA)
+
+
+#==============================================================================
+# This constructs a list of makefiles based on CATEGORIES
+#==============================================================================
+
+MAKEFILELIST += \
+             $(foreach cat, $(CATEGORIES), \
+             $(CATEGORY_ROOT)/$(cat)/bld/$(TARGET).mk)
+
+
+#==============================================================================
+# Rule: BUILD TARGET
+#==============================================================================
+
+$(BUILD_TARGET) : 
+	@for X in $(MAKEFILELIST); \
+	do \
+	$(MAKE) -f $$X; \
+	done
+
+
+#==============================================================================
+# Clean Rule
+#==============================================================================
+
+.PHONY: clean
+clean :
+	@for X in $(MAKEFILELIST); \
+	do \
+	$(MAKE) -f $$X clean; \
+	done
+
+.PHONY: cleanall
+cleanall :
+	@for X in $(MAKEFILELIST); \
+	do \
+	$(MAKE) -f $$X cleanall; \
+	done
+
+
+#==============================================================================
+# Install Rule
+#==============================================================================
+
+.PHONY: install
+install :
+	@for X in $(MAKEFILELIST); \
+	do \
+	$(MAKE) -f $$X install; \
+	done
+
+
